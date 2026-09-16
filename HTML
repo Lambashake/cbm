@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chota Baby Mroq Destroys Chembur!</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+    body {
+      background-color: #050505;
+      color: #00ff66;
+      font-family: 'Courier New', Courier, monospace;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      overflow: hidden;
+    }
+    h1 {
+      margin-bottom: 5px;
+      text-shadow: 2px 2px #ff0055;
+      font-size: 22px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+    }
+    .game-container {
+      position: relative;
+      border: 4px solid #333;
+      box-shadow: 0 0 20px #00ff66;
+    }
+    canvas {
+      display: block;
+      background-color: #110022;
+      image-rendering: pixelated;
+    }
+    /* CRT Scanline effect */
+    .game-container::after {
+      content: " ";
+      display: block;
+      position: absolute;
+      top: 0; left: 0; bottom: 0; right: 0;
+      background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%);
+      background-size: 100% 4px;
+      pointer-events: none;
+    }
+    .instructions {
+      margin-top: 10px;
+      font-size: 14px;
+      color: #aaa;
+      text-align: center;
+    }
+    kbd {
+      background: #222;
+      color: #fff;
+      padding: 2px 6px;
+      border-radius: 3px;
+      border: 1px solid #555;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>CHOTA BABY MROQ DESTROYS CHEMBUR</h1>
+  <div class="game-container">
+    <canvas id="gameCanvas" width="800" height="500"></canvas>
+  </div>
+  <div class="instructions">
+    Move: <kbd>A</kbd> / <kbd>D</kbd> or <kbd>←</kbd> / <kbd>→</kbd> | 
+    Smash: <kbd>SPACE</kbd> | 
+    Atomic Breath: <kbd>ENTER</kbd>
+  </div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+// --- RETRO AUDIO SYNTHESIS ---
+const AudioCtx = window.AudioContext || window.webkitAudioContext;
+let audioCtx;
+
+function initAudio() {
+  if (!audioCtx) audioCtx = new AudioCtx();
+}
+
+function playSound(type) {
+  if (!audioCtx) return;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+
+  const now = audioCtx.currentTime;
+
+  if (type === 'smash') {
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(120, now);
+    osc.frequency.exponentialRampToValueAtTime(30, now + 0.2);
+    gain.gain.setValueAtTime(0.3, now);
+    gain.gain.linearRampToValueAtTime(0.01, now + 0.2);
+    osc.start(now);
+    osc.stop(now + 0.2);
+  } else if (type === 'roar') {
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(150, now);
+    osc.frequency.linearRampToValueAtTime(400, now + 0.15);
+    osc.frequency.linearRampToValueAtTime(80, now + 0.4);
+    gain.gain.setValueAtTime(0.4, now);
+    gain.gain.linearRampToValueAtTime(0.01, now + 0.4);
+    osc.start(now);
+    osc.stop(now + 0.4);
+  } else if (type === 'rebuild') {
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(300, now);
+    osc.frequency.exponentialRampToValueAtTime(800, now + 0.3);
+    gain.gain.setValueAtTime(0.2, now);
+    gain.gain.linearRampToValueAtTime(0.01, now + 0.3);
+    osc.start(now);
+    osc.stop(now + 0.3);
+  }
+}
+
+// --- GAME STATE & VARIABLES ---
+let gameState = 'START'; // 'START', 'PLAYING', 'GAMEOVER'
+let score = 0;
+let highScore = 0;
+let timer = 60;
+let timerInterval = null;
+let currentDay = 1;
+
+let floatingTexts = [];
+let particles = [];
+
+// Player: Chota Baby Mroq
+const mroq = {
+  x: 100,
+  y: 320,
+  width: 70,
+  height: 90,
+  speed: 5,
+  facing: 'right',
+  isAttacking: false,
+  attackType: null,
+  attackFrame: 0
+};
+
+// Chembur Buildings
+let buildings = [];
+const buildingNames = ["Chembur Station", "KSTAR Mall", "Monorail", "Golf Club", "RK Studio", "Chhabra Bakeries", "Diamond Garden"];
+
+function generateChembur() {
+  buildings = [];
+  const startX = 50;
+  const totalWidth = 700;
+  const count = 7;
+  const gap = 15;
+  const bWidth = (totalWidth - (gap * (count - 1))) / count;
+
+  for (let i = 0; i < count; i++) {
+    const height = 120 + Math.floor(Math.random() * 120);
+    buildings.push({
+      x: startX + i * (bWidth + gap),
+      y: 410 - height,
+      width: bWidth,
+      height: height,
+      maxHp: 100,
+      hp: 100,
+      name: buildingNames[i % buildingNames.length],
+      color: `hsl(${i * 45 + 180}, 60%, 40%)`
+    });
+  }
+}
+
+// --- CONTROLS ---
+const keys = {};
+window.addEventListener('keydown', (e) => {
+  initAudio();
+  keys[e.code] = true;
+
+  if (gameState === 'PLAYING') {
+    if (e.code === 'Space' && !mroq.isAttacking) {
+      mroq.isAttacking = true;
+      mroq.attackType = 'smash';
+      mroq.attackFrame = 15;
+      playSound('smash');
+      performAttack();
+    }
+    if (e.code === 'Enter' && !mroq.isAttacking) {
+      mroq.isAttacking = true;
+      mroq.attackType = 'roar';
+      mroq.attackFrame = 25;
+      playSound('roar');
+      performAttack();
+    }
+  }
+
+  if (e.code === 'KeyR' && gameState === 'GAMEOVER') {
+    nextDayRebuild();
+  }
+});
+
+window.addEventListener('keyup', (e) => {
+  keys[e.code] = false;
+});
+
+// --- GAME ACTIONS ---
+function startGame() {
+  score = 0;
+  timer = 60;
+  currentDay = 1;
+  gameState = 'PLAYING';
+  generateChembur();
+  startTimer();
+}
+
+function nextDayRebuild() {
+  currentDay++;
+  timer = 60;
+  gameState = 'PLAYING';
+  generateChembur();
+  playSound('rebuild');
+  startTimer();
+}
+
+function startTimer() {
+  clearInterval(timerInterval);
+  timerInterval = setInterval(() => {
+    if (gameState === 'PLAYING') {
+      timer--;
+      if (timer <= 0) {
+        gameState = 'GAMEOVER';
+        if (score > highScore) highScore = score;
+        clearInterval(timerInterval);
+      }
+    }
+  }, 1000);
+}
+
+function addFloatingText(text, x, y, color = '#ffff00') {
+  floatingTexts.push({ text, x, y, opacity: 1, color });
+}
+
+function createDebris(x, y, color) {
+  for (let i = 0; i < 8; i++) {
+    particles.push({
+      x: x,
+      y: y,
+      vx: (Math.random() - 0.5) * 8,
+      vy: (Math.random() - 0.5) * 8,
+      size: Math.random() * 6 + 2,
+      life: 20,
+      color: color
+    });
+  }
+}
+
+function performAttack() {
+  const attackRange = mroq.attackType === 'roar' ? 220 : 70;
+  const attackBox = {
+    x: mroq.facing === 'right' ? mroq.x + mroq.width : mroq.x - attackRange,
+    y: mroq.y,
+    width: attackRange,
+    height: mroq.height
+  };
+
+  buildings.forEach(b => {
+    if (b.hp > 0 &&
+        attackBox.x < b.x + b.width &&
+        attackBox.x + attackBox.width > b.x &&
+        attackBox.y < b.y + b.height &&
+        attackBox.y + attackBox.height > b.y) {
+      
+      const dmg = mroq.attackType === 'roar' ? 40 : 25;
+      b.hp = Math.max(0, b.hp - dmg);
+      
+      const pts = mroq.attackType === 'roar' ? 250 : 100;
+      score += pts;
+
+      addFloatingText(`+${pts}`, b.x + b.width / 2, b.y + 20);
+      createDebris(b.x + b.width / 2, b.y + b.height / 2, b.color);
+
+      if (b.hp === 0) {
+        score += 500;
+        addFloatingText(`DESTROYED! +500`, b.x + b.width / 2, b.y - 10, '#ff0055');
+      }
+    }
+  });
+}
+
+// --- UPDATE & DRAW ---
+function update() {
+  if (gameState !== 'PLAYING') return;
+
+  // Movement
+  if (keys['KeyA'] || keys['ArrowLeft']) {
+    mroq.x -= mroq.speed;
+    mroq.facing = 'left';
+  }
+  if (keys['KeyD'] || keys['ArrowRight']) {
+    mroq.x += mroq.speed;
+    mroq.facing = 'right';
+  }
+
+  // Boundaries
+  mroq.x = Math.max(10, Math.min(canvas.width - mroq.width - 10, mroq.x));
+
+  // Attack timer update
+  if (mroq.isAttacking) {
+    mroq.attackFrame--;
+    if (mroq.attackFrame <= 0) {
+      mroq.isAttacking = false;
+    }
+  }
+
+  // Update particles
+  particles.forEach((p, idx) => {
+    p.x += p.vx;
+    p.y += p.vy;
+    p.life--;
+    if (p.life <= 0) particles.splice(idx, 1);
+  });
+
+  // Update floating text
+  floatingTexts.forEach((ft, idx) => {
+    ft.y -= 1.5;
+    ft.opacity -= 0.02;
+    if (ft.opacity <= 0) floatingTexts.splice(idx, 1);
+  });
+}
+
+function drawMroq() {
+  ctx.save();
+  ctx.translate(mroq.x + mroq.width / 2, mroq.y + mroq.height / 2);
+  if (mroq.facing === 'left') ctx.scale(-1, 1);
+
+  // Body (Green Lizard)
+  ctx.fillStyle = "#2e7d32";
+  ctx.fillRect(-25, -35, 50, 70);
+
+  // Head
+  ctx.fillStyle = "#1b5e20";
+  ctx.fillRect(-15, -45, 40, 25);
+
+  // Eye
+  ctx.fillStyle = "#ffff00";
+  ctx.fillRect(10, -40, 8, 8);
+  ctx.fillStyle = "#ff0000";
+  ctx.fillRect(12, -38, 4, 4);
+
+  // Spikes (Back)
+  ctx.fillStyle = "#00e676";
+  ctx.beginPath();
+  ctx.moveTo(-25, -30); ctx.lineTo(-35, -20); ctx.lineTo(-25, -10);
+  ctx.moveTo(-25, -10); ctx.lineTo(-35, 0); ctx.lineTo(-25, 10);
+  ctx.moveTo(-25, 10); ctx.lineTo(-35, 20); ctx.lineTo(-25, 30);
+  ctx.fill();
+
+  // Attack animation (Atomic Ray)
+  if (mroq.isAttacking && mroq.attackType === 'roar') {
+    ctx.fillStyle = '#00ffff';
+    ctx.fillRect(25, -38, 180, 15);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(25, -34, 180, 7);
+  }
+
+  // Attack Animation (Smash Claw)
+  if (mroq.isAttacking && mroq.attackType === 'smash') {
+    ctx.fillStyle = '#ffea00';
+    ctx.fillRect(20, -10, 35, 15);
+  }
+
+  ctx.restore();
+
+  // Name Label above Godzilla
+  ctx.fillStyle = "#00ff66";
+  ctx.font = "bold 12px 'Courier New'";
+  ctx.textAlign = "center";
+  ctx.fillText("CHOTA BABY MROQ", mroq.x + mroq.width / 2, mroq.y - 12);
+}
+
+function draw() {
+  // Clear screen
+  ctx.fillStyle = "#0a0518";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Moon
+  ctx.fillStyle = "#fff59d";
+  ctx.beginPath();
+  ctx.arc(700, 80, 40, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Ground (Chembur Soil)
+  ctx.fillStyle = "#221100";
+  ctx.fillRect(0, 410, canvas.width, 90);
+  ctx.fillStyle = "#00ff66";
+  ctx.fillRect(0, 406, canvas.width, 4);
+
+  // Draw Buildings
+  buildings.forEach(b => {
+    if (b.hp > 0) {
+      // Building Frame
+      ctx.fillStyle = b.color;
+      const currentHeight = (b.height * (b.hp / b.maxHp));
+      const currentY = 410 - currentHeight;
+      ctx.fillRect(b.x, currentY, b.width, currentHeight);
+
+      // Windows
+      ctx.fillStyle = "#ffea00";
+      for (let wx = b.x + 8; wx < b.x + b.width - 10; wx += 14) {
+        for (let wy = currentY + 10; wy < 400; wy += 20) {
+          if (Math.random() > 0.1) ctx.fillRect(wx, wy, 6, 8);
+        }
+      }
+
+      // Building Label
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "10px 'Courier New'";
+      ctx.textAlign = "center";
+      ctx.fillText(b.name, b.x + b.width / 2, 425);
+    } else {
+      // Rubble
+      ctx.fillStyle = "#444";
+      ctx.fillRect(b.x, 395, b.width, 15);
+      ctx.fillStyle = "#ffaa00";
+      ctx.font = "10px 'Courier New'";
+      ctx.textAlign = "center";
+      ctx.fillText("RUINS", b.x + b.width / 2, 405);
+    }
+  });
+
+  // Draw Player
+  drawMroq();
+
+  // Draw Particles
+  particles.forEach(p => {
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x, p.y, p.size, p.size);
+  });
+
+  // Draw Floating Text (+100 PTS)
+  floatingTexts.forEach(ft => {
+    ctx.fillStyle = ft.color;
+    ctx.font = "bold 16px 'Courier New'";
+    ctx.textAlign = "center";
+    ctx.fillText(ft.text, ft.x, ft.y);
+  });
+
+  // --- HUD / UI ---
+  ctx.fillStyle = "#00ff66";
+  ctx.font = "bold 18px 'Courier New'";
+  ctx.textAlign = "left";
+  ctx.fillText(`SCORE: ${score}`, 20, 30);
+  ctx.fillText(`DAY: ${currentDay}`, 20, 55);
+
+  ctx.textAlign = "right";
+  ctx.fillStyle = timer <= 10 ? "#ff0055" : "#00ff66";
+  ctx.fillText(`TIME: ${timer}s`, canvas.width - 20, 30);
+  ctx.fillStyle = "#00ff66";
+  ctx.fillText(`HIGH SCORE: ${highScore}`, canvas.width - 20, 55);
+
+  // Game States Overlay
+  if (gameState === 'START') {
+    ctx.fillStyle = "rgba(0,0,0,0.85)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.fillStyle = "#00ff66";
+    ctx.font = "bold 28px 'Courier New'";
+    ctx.textAlign = "center";
+    ctx.fillText("CHOTA BABY MROQ DESTROYS CHEMBUR", canvas.width / 2, 180);
+
+    ctx.font = "16px 'Courier New'";
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText("You have 60 seconds to smash Chembur into pieces!", canvas.width / 2, 240);
+    ctx.fillText("Press ANY KEY to Start", canvas.width / 2, 300);
+  } else if (gameState === 'GAMEOVER') {
+    ctx.fillStyle = "rgba(0,0,0,0.85)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.fillStyle = "#ff0055";
+    ctx.font = "bold 32px 'Courier New'";
+    ctx.textAlign = "center";
+    ctx.fillText("DAY IS OVER!", canvas.width / 2, 160);
+
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "20px 'Courier New'";
+    ctx.fillText(`FINAL SCORE: ${score}`, canvas.width / 2, 210);
+
+    ctx.fillStyle = "#00ff66";
+    ctx.font = "16px 'Courier New'";
+    ctx.fillText("Chembur rebuilt itself overnight!", canvas.width / 2, 270);
+    ctx.fillText("Press 'R' to destroy Chembur again tomorrow!", canvas.width / 2, 310);
+  }
+}
+
+// Global click/key to start initial game
+window.addEventListener('keydown', () => {
+  if (gameState === 'START') startGame();
+});
+
+function loop() {
+  update();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+loop();
+</script>
+</body>
+</html>
